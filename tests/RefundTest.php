@@ -206,6 +206,47 @@ final class GivewpRefund
         echo "PASS native permission and nonce, strict bound shape, recipient pin, terminal failures and no second transfer\n";
     }
 
+    public static function testFinalPaidWithinServerTolerance(): void
+    {
+        // The server finalised 9.95 of 10 as paid: the donation was completed, so it can be refunded in full.
+        RefundFixture::reset('9.95', '10', 'paid');
+        RefundFixture::$invoice['payment']['remaining'] = '0.05';
+        self::check(self::state(RefundFixture::call('request'), 'full') === 'pending'
+            && RefundIntentStore::byAttempt(1, 'full')['expected_amount'] === '9.95' && count(RefundFixture::$posts) === 1,
+            'A final paid invoice inside the server tolerance was not refundable for the amount actually paid.');
+
+        RefundFixture::reset('9.95', '10', 'paid');
+        RefundFixture::$invoice['payment']['remaining'] = '0.05';
+        self::check(self::state(RefundFixture::call('request', 'overpayment'), 'overpayment') === 'reserved'
+            && RefundIntentStore::byAttempt(1, 'overpayment')['review_reason'] === 'refund_amount_unavailable'
+            && RefundFixture::$posts === [], 'An underpaid invoice offered an excess to refund.');
+
+        foreach (['late' => ['paid_late_at' => time()], 'underpaid' => ['status' => 'underpaid']] as $case => $change) {
+            RefundFixture::reset('9.95', '10', 'paid');
+            RefundFixture::$invoice = array_replace(RefundFixture::$invoice, $change);
+            self::check(self::state(RefundFixture::call('request'), 'full') === 'reserved'
+                && RefundIntentStore::byAttempt(1, 'full')['review_reason'] === 'payment_evidence_mismatch'
+                && RefundFixture::$posts === [], 'A refund was sent for unsettled evidence: ' . $case);
+        }
+
+        echo "PASS final paid inside the server tolerance refunds the paid amount; no excess, late or underpaid refund\n";
+    }
+
+    public static function testNearPrecisionRefundHistory(): void
+    {
+        RefundFixture::reset('10.000000000000000000000001');
+        self::check(self::state(RefundFixture::call('request', 'overpayment'), 'overpayment') === 'pending'
+            && RefundIntentStore::byAttempt(1, 'overpayment')['expected_amount'] === '1.000000000000000000000001',
+            'The 24-decimal excess was not computed exactly.');
+        RefundFixture::terminal('overpayment', 'completed');
+        self::check(self::state(RefundFixture::call('poll', 'overpayment'), 'overpayment') === 'completed', 'The 24-decimal excess refund did not complete.');
+        self::check(self::state(RefundFixture::call('request'), 'full') === 'pending'
+            && RefundIntentStore::byAttempt(1, 'full')['expected_amount'] === '9',
+            'A completed 24-decimal refund was not subtracted exactly from the paid amount.');
+
+        echo "PASS NEAR 24-decimal paid amount and refund history are subtracted exactly\n";
+    }
+
     public static function check(bool $condition, string $failure): void
     {
         if (!$condition) {
@@ -243,7 +284,7 @@ final class RefundFixture
     public static $detailPins = [];
     public static $postSnapshot;
 
-    public static function reset(string $paid = '9'): void
+    public static function reset(string $paid = '9', string $expected = '9', ?string $status = null): void
     {
         $GLOBALS['wpdb'] = new GivewpRefundDb();
         self::$options = [
@@ -285,14 +326,14 @@ final class RefundFixture
         ]);
         self::$invoice = [
             'invoice_id' => 'inv_fixture', 'project_id' => 'prj_fixture', 'is_test' => true, 'is_final' => true,
-            'status' => $paid === '9' ? 'paid' : 'paid_over',
+            'status' => $status ?? ($paid === $expected ? 'paid' : 'paid_over'),
             'order' => ['external_id' => 'givewp_invoice', 'amount' => '12.68', 'currency' => 'USD'],
             'payment_url' => 'https://checkout.paymos.io/invoice/inv_fixture',
-            'payment' => ['currency' => 'USDT', 'network' => 'SOL', 'chain_id' => -2, 'expected' => '9', 'paid' => $paid, 'remaining' => '0'],
+            'payment' => ['currency' => 'USDT', 'network' => 'SOL', 'chain_id' => -2, 'expected' => $expected, 'paid' => $paid, 'remaining' => '0'],
         ];
 
         $proof = Settlement::proofBinding($attempt) + ['coverage' => [
-            'currency' => 'USDT', 'network' => 'SOL', 'chainId' => -2, 'contract' => null, 'expected' => '9',
+            'currency' => 'USDT', 'network' => 'SOL', 'chainId' => -2, 'contract' => null, 'expected' => $expected,
         ]];
         $lock = AttemptStore::lock(51);
         GivewpRefund::check($lock->acquire(), 'Could not lock the fixture donation.');
@@ -331,7 +372,8 @@ final class RefundFixture
             && $intent['external_order_id'] === $body['external_order_id'], 'A payout was sent before its exact local intent.');
         self::$posts[] = $body;
         $id = 'wdr_' . $mode;
-        $amount = $mode === 'overpayment' ? '1.000000000000000001' : '9';
+        // Paymos pays out exactly the amount the plugin computed and saved before the POST.
+        $amount = $intent['expected_amount'];
         self::$remote[$id] = [
             'withdrawal_id' => $id, 'invoice_id' => $body['invoice_id'], 'mode' => $mode,
             'external_order_id' => $body['external_order_id'], 'project_id' => 'prj_fixture', 'type' => 'refund',
@@ -668,3 +710,5 @@ GivewpRefund::testFirstRefundSnapshotPinsRecipient(false);
 GivewpRefund::testFirstRefundSnapshotPinsRecipient(true);
 GivewpRefund::testMissingOrConflictingFirstSnapshotNeedsList();
 GivewpRefund::testCrossBindingAndCapability();
+GivewpRefund::testFinalPaidWithinServerTolerance();
+GivewpRefund::testNearPrecisionRefundHistory();

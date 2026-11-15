@@ -64,8 +64,8 @@ final class GivewpWebhook
                     GivewpSettlementFixture::$native[51] = new Donation(GivewpSettlementFixture::$native[51]->getAttributes());
                     break;
                 case 'coverage':
-                    GivewpSettlementFixture::$invoice['payment']['paid'] = '8.999999999999999999';
-                    $event['data'] = GivewpSettlementFixture::$invoice;
+                    // The signed event and the exact GET must report the same coverage.
+                    $event['data']['payment']['paid'] = '8.999999999999999999';
                     break;
                 case 'asset':
                     $event['data']['payment']['network'] = 'TRC20';
@@ -104,6 +104,20 @@ final class GivewpWebhook
         }
 
         echo "PASS signature, exact scope, amount, asset, coverage, late/partial funds, refund visibility and manual-state denials\n";
+    }
+
+    public static function testPaidWithinServerTolerance(): void
+    {
+        GivewpSettlementFixture::reset();
+        GivewpSettlementFixture::$invoice['payment']['expected'] = '10';
+        GivewpSettlementFixture::$invoice['payment']['paid'] = '9.95';
+        GivewpSettlementFixture::$invoice['payment']['remaining'] = '0.05';
+        self::check(GivewpSettlementFixture::deliver(GivewpSettlementFixture::event())->get_status() === 200, 'The final paid event was refused.');
+        $row = AttemptStore::byId(1);
+        self::check($row['status'] === 'verified_paid' && $row['review_reason'] === null && Donation::find(51)->status->isComplete()
+            && GivewpSettlementFixture::$writes === 1, 'A final paid invoice with a remaining amount inside the server tolerance was held for review.');
+
+        echo "PASS a final paid webhook completes the donation when the server accepted the remaining amount\n";
     }
 
     public static function testTerminalPaymentReview(): void
@@ -673,6 +687,7 @@ if (realpath($_SERVER['SCRIPT_FILENAME']) === __FILE__) {
     loadGivewpSettlementFixture($argv);
     GivewpWebhook::testVerifiedPaymentOnce();
     GivewpWebhook::testRejectInvalidOrInsufficientPayment();
+    GivewpWebhook::testPaidWithinServerTolerance();
     GivewpWebhook::testTerminalPaymentReview();
     GivewpWebhook::testParallelDelivery();
     GivewpWebhook::testNativeGuards();

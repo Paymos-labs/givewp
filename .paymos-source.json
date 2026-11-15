@@ -1,6 +1,6 @@
 {
   "source_repository": "Paymos-labs/paymos",
   "source_path": "plugins/givewp-paymos",
-  "source_commit": "f11ea46b705bbcca13009e35fdc9a52b83573a33",
-  "version": "1.0.0"
+  "source_commit": "ea3089e5042b66caaab667fcbd235226085a6a18",
+  "version": "1.0.1"
 }

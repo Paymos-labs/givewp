@@ -98,6 +98,55 @@ final class GivewpReconcile
         echo "PASS due exact GET records terminal funding or late payment and leaves empty final invoices resolved\n";
     }
 
+    public static function testFinalPaidTrustsServerTolerance(): void
+    {
+        foreach ([
+            'tolerance' => ['paid', '10', '9.95', '0.05'],
+            'tolerance_over' => ['paid_over', '10', '9.95', '0.05'],
+            'near' => ['paid', '1.000000000000000000000001', '1.000000000000000000000001', '0'],
+        ] as $case => [$status, $expected, $paid, $remaining]) {
+            GivewpSettlementFixture::reset();
+            GivewpSettlementFixture::$invoice['status'] = $status;
+            GivewpSettlementFixture::$invoice['payment']['expected'] = $expected;
+            GivewpSettlementFixture::$invoice['payment']['paid'] = $paid;
+            GivewpSettlementFixture::$invoice['payment']['remaining'] = $remaining;
+
+            $run = Reconciler::run(1);
+            $row = AttemptStore::byId(1);
+            self::check($run === ['checked' => 1, 'busy' => 0, 'errors' => 0], 'The final paid invoice was not reconciled: ' . $case);
+            self::check($row['status'] === 'verified_paid' && $row['review_reason'] === null
+                && Donation::find(51)->status->isComplete() && EventStore::projection(1, 'paid')['stage'] === 'done',
+                'A final paid invoice was held for review instead of completing the donation: ' . $case);
+            self::check(GivewpSettlementFixture::$writes === 1 && count(GivewpSettlementFixture::$notes) === 1, 'The paid projection did not run once: ' . $case);
+        }
+
+        echo "PASS final paid and paid_over complete the donation within the server tolerance and with 24 NEAR decimals\n";
+    }
+
+    public static function testUnsettledPaidEvidenceStaysPending(): void
+    {
+        foreach ([
+            'late' => ['paid', true, time()],
+            'not_final' => ['underpaid_waiting', false, null],
+            'final_flag_missing' => ['paid', false, null],
+        ] as $case => [$status, $final, $lateAt]) {
+            GivewpSettlementFixture::reset();
+            GivewpSettlementFixture::$invoice['status'] = $status;
+            GivewpSettlementFixture::$invoice['is_final'] = $final;
+            GivewpSettlementFixture::$invoice['paid_late_at'] = $lateAt;
+            GivewpSettlementFixture::$invoice['payment']['expected'] = '10';
+            GivewpSettlementFixture::$invoice['payment']['paid'] = '9.95';
+            GivewpSettlementFixture::$invoice['payment']['remaining'] = '0.05';
+
+            Reconciler::run(1);
+            self::check(AttemptStore::byId(1)['status'] !== 'verified_paid' && Donation::find(51)->status->isPending()
+                && GivewpSettlementFixture::$writes === 0 && EventStore::projection(1, 'paid') === null,
+                'Late or unfinished evidence completed the donation: ' . $case);
+        }
+
+        echo "PASS late payment and unfinished invoices with partial funds never complete the donation\n";
+    }
+
     private static function check(bool $condition, string $failure): void
     {
         GivewpWebhook::check($condition, $failure);
@@ -108,3 +157,5 @@ loadGivewpSettlementFixture($argv);
 GivewpReconcile::testCrashWindows();
 GivewpReconcile::testMissedWebhookUsesOriginalGeneration();
 GivewpReconcile::testMissedTerminalPaymentNeedsReview();
+GivewpReconcile::testFinalPaidTrustsServerTolerance();
+GivewpReconcile::testUnsettledPaidEvidenceStaysPending();

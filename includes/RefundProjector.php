@@ -325,8 +325,7 @@ final class RefundProjector
         $paid = self::decimal($payment['paid'] ?? null);
         if (
             !is_string($currency) || !is_string($network) || !is_int($chainId) || $chainId === 0
-            || $expected === null || $expected === '0' || $paid === null || self::difference($paid, $expected) === null
-            || self::decimal($payment['remaining'] ?? null) !== '0'
+            || $expected === null || $expected === '0' || $paid === null
         ) {
             return null;
         }
@@ -442,7 +441,7 @@ final class RefundProjector
 
     private static function decimal($value): ?string
     {
-        return is_string($value) && preg_match('/\A[0-9]{1,28}(?:\.[0-9]{1,18})?\z/', $value) === 1
+        return is_string($value) && preg_match('/\A[0-9]{1,28}(?:\.[0-9]{1,28})?\z/', $value) === 1
             ? AmountGuard::normalizeDecimal($value) : null;
     }
 
@@ -463,14 +462,14 @@ final class RefundProjector
             $digits = (string) ($value + 10 * $borrow) . $digits;
         }
 
-        return AmountGuard::normalizeDecimal(substr($digits, 0, -18) . '.' . substr($digits, -18));
+        return AmountGuard::normalizeDecimal(substr($digits, 0, -28) . '.' . substr($digits, -28));
     }
 
     private static function minorUnits(string $value): string
     {
         [$whole, $fraction] = array_pad(explode('.', $value, 2), 2, '');
 
-        return str_pad($whole, 28, '0', STR_PAD_LEFT) . str_pad($fraction, 18, '0');
+        return str_pad($whole, 28, '0', STR_PAD_LEFT) . str_pad($fraction, 28, '0');
     }
 
     private static function id($value, string $prefix): bool

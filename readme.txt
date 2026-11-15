@@ -4,7 +4,7 @@ Tags: givewp, donations, stablecoins, payments, usdc
 Requires at least: 6.9
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.0.0
+Stable tag: 1.0.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -50,6 +50,9 @@ Disabling the gateway stops new Paymos donations and preserves the credentials n
 Contact [support@paymos.io](mailto:support@paymos.io) for help with Paymos checkout, connection, or refunds.
 
 == Changelog ==
+
+= 1.0.1 =
+* Trusted server-confirmed final paid settlement status, preserved 24-decimal NEAR amount formatting, and expanded tolerance refund reconciliation tests.
 
 = 1.0.0 =
 * Added Paymos checkout for one-time GiveWP donations, signed payment verification, and full and overpayment refund reconciliation.

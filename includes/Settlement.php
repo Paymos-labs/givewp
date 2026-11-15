@@ -266,6 +266,7 @@ final class Settlement
         return is_string($id) && preg_match('/\Ainv_[A-Za-z0-9_-]{1,120}\z/', $id) === 1 ? $client->invoices()->get($id) : null;
     }
 
+    /** Callers check paid/paid_over first; the server has already applied its underpayment tolerance. */
     private static function fullPayment(array $invoice): ?array
     {
         $payment = $invoice['payment'] ?? null;
@@ -284,8 +285,6 @@ final class Settlement
             || !is_int($chainId) || $chainId === 0
             || ($contract !== null && (!is_string($contract) || preg_match('/\A[A-Za-z0-9:._-]{1,128}\z/', $contract) !== 1))
             || $expected === null || $expected === '0' || $paid === null
-            || self::decimal($payment['remaining'] ?? null) !== '0'
-            || self::compareDecimal($paid, $expected) < 0
         ) {
             return null;
         }
@@ -295,18 +294,8 @@ final class Settlement
 
     private static function decimal($value): ?string
     {
-        return is_string($value) && preg_match('/\A[0-9]{1,28}(?:\.[0-9]{1,18})?\z/', $value) === 1
+        return is_string($value) && preg_match('/\A[0-9]{1,28}(?:\.[0-9]{1,28})?\z/', $value) === 1
             ? AmountGuard::normalizeDecimal($value) : null;
-    }
-
-    private static function compareDecimal(string $left, string $right): int
-    {
-        [$leftWhole, $leftFraction] = array_pad(explode('.', $left, 2), 2, '');
-        [$rightWhole, $rightFraction] = array_pad(explode('.', $right, 2), 2, '');
-
-        return (strlen($leftWhole) <=> strlen($rightWhole))
-            ?: strcmp($leftWhole, $rightWhole)
-            ?: strcmp(str_pad($leftFraction, 18, '0'), str_pad($rightFraction, 18, '0'));
     }
 
     private static function refundReview(Client $client, array $attempt, array $payment): ?string
