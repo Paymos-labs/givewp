@@ -4,9 +4,9 @@ Copyright (c) 2026 Paymos Labs
 The WordPress plugin is distributed under the GNU General Public License,
 version 2 or later. See LICENSE.
 
-The installation ZIP includes Paymos PHP SDK v1.9.1, Copyright (c) 2026
-Paymos Labs, distributed under the MIT License. Its original license is in
+The installation ZIP includes Paymos PHP SDK, Copyright (c) 2026 Paymos Labs,
+distributed under the MIT License. Its original license is in
 vendor/paymos/php-sdk/LICENSE. The builder scopes PHP namespace tokens to
 PaymosGivewpVendor\Paymos for compatibility with other Paymos plugins.
-The pinned source and installed file hashes are recorded in
-vendor/paymos/php-sdk/scope-manifest.json.
+The bundled SDK version, source provenance, and scoped file hashes are
+recorded in vendor/paymos/php-sdk/scope-manifest.json.
