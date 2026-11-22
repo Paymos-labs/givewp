@@ -3,7 +3,7 @@
  * Plugin Name: Paymos Stablecoin Donations
  * Plugin URI: https://paymos.io/docs/cms-givewp
  * Description: Accept stablecoin donations through Paymos in GiveWP.
- * Version: 1.1.0
+ * Version: 1.1.1
  * Author: Paymos
  * Author URI: https://paymos.io
  * License: GPL-2.0-or-later
@@ -19,7 +19,7 @@ defined('ABSPATH') || exit;
 
 define('PAYMOS_GIVEWP_PLUGIN_FILE', __FILE__);
 define('PAYMOS_GIVEWP_PLUGIN_DIR', __DIR__ . '/');
-define('PAYMOS_GIVEWP_PLUGIN_VERSION', '1.1.0');
+define('PAYMOS_GIVEWP_PLUGIN_VERSION', '1.1.1');
 
 require_once PAYMOS_GIVEWP_PLUGIN_DIR . 'includes/Autoloader.php';
 

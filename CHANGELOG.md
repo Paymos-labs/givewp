@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-11-22
+
+- chore: rebuild canonical CMS package
+
 ## [1.1.0] - 2026-11-21
 
 - feat(release): automate Odoo 20.0 and GiveWP releases across all 21 ecosystem mirrors
