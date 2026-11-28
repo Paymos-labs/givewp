@@ -208,18 +208,19 @@ final class GivewpRefund
 
     public static function testFinalPaidWithinServerTolerance(): void
     {
-        // The server finalised 9.95 of 10 as paid: the donation was completed, so it can be refunded in full.
-        RefundFixture::reset('9.95', '10', 'paid');
-        RefundFixture::$invoice['payment']['remaining'] = '0.05';
-        self::check(self::state(RefundFixture::call('request'), 'full') === 'pending'
-            && RefundIntentStore::byAttempt(1, 'full')['expected_amount'] === '9.95' && count(RefundFixture::$posts) === 1,
-            'A final paid invoice inside the server tolerance was not refundable for the amount actually paid.');
-
-        RefundFixture::reset('9.95', '10', 'paid');
-        RefundFixture::$invoice['payment']['remaining'] = '0.05';
-        self::check(self::state(RefundFixture::call('request', 'overpayment'), 'overpayment') === 'reserved'
-            && RefundIntentStore::byAttempt(1, 'overpayment')['review_reason'] === 'refund_amount_unavailable'
-            && RefundFixture::$posts === [], 'An underpaid invoice offered an excess to refund.');
+        // The server finalised 9.95 of 10 as paid, so the donation completed. Paymos refunds only an invoice
+        // whose received amount covers the expected one, so it refuses both modes for this donation.
+        foreach (['full', 'overpayment'] as $mode) {
+            RefundFixture::reset('9.95', '10', 'paid');
+            RefundFixture::$invoice['payment']['remaining'] = '0.05';
+            $response = RefundFixture::call('request', $mode);
+            self::check(self::state($response, $mode) === 'reserved'
+                && RefundIntentStore::byAttempt(1, $mode)['review_reason'] === 'refund_amount_unavailable'
+                && RefundFixture::$posts === [], 'A refund the server always refuses was sent for a tolerance payment: ' . $mode);
+            self::check($response->data['modes'][$mode]['can_request'] === false
+                && RefundFixture::call('status')->data['modes'][$mode]['can_request'] === false,
+                'A refund the server always refuses was offered again: ' . $mode);
+        }
 
         foreach (['late' => ['paid_late_at' => time()], 'underpaid' => ['status' => 'underpaid']] as $case => $change) {
             RefundFixture::reset('9.95', '10', 'paid');
@@ -229,7 +230,30 @@ final class GivewpRefund
                 && RefundFixture::$posts === [], 'A refund was sent for unsettled evidence: ' . $case);
         }
 
-        echo "PASS final paid inside the server tolerance refunds the paid amount; no excess, late or underpaid refund\n";
+        echo "PASS final paid inside the server tolerance offers no refund in either mode; no late or underpaid refund\n";
+    }
+
+    public static function testAcceptedRefundRereadAfterTemporaryDenial(): void
+    {
+        foreach ([401, 403, 404] as $status) {
+            RefundFixture::reset();
+            RefundFixture::$detailDenials = [$status];
+            // Paymos accepted the POST; only the detail read right after it is denied, once.
+            self::check(self::state(RefundFixture::call('request'), 'full') === 'unknown' && count(RefundFixture::$posts) === 1,
+                'A temporary ' . $status . ' after an accepted refund ended the operation.');
+            $intent = RefundIntentStore::byAttempt(1, 'full');
+            self::check($intent['withdrawal_id'] === 'wdr_full' && $intent['reconcile_after'] !== null,
+                'The accepted refund was not kept for another read after a ' . $status . '.');
+
+            RefundFixture::terminal('full', 'completed');
+            $GLOBALS['wpdb']->refunds[$intent['id']]['reconcile_after'] = time() - 1;
+            self::check(Reconciler::run(1) === ['checked' => 1, 'busy' => 0, 'errors' => 0],
+                'Scheduled recovery did not read the accepted refund again after a ' . $status . '.');
+            self::check(RefundIntentStore::byAttempt(1, 'full')['state'] === 'completed' && Donation::find(51)->status->isRefunded()
+                && count(RefundFixture::$posts) === 1, 'The accepted refund was not recorded after a ' . $status . ' read.');
+        }
+
+        echo "PASS an accepted refund whose first read gets 401/403/404 is read again and recorded with one POST\n";
     }
 
     public static function testNearPrecisionRefundHistory(): void
@@ -245,6 +269,53 @@ final class GivewpRefund
             'A completed 24-decimal refund was not subtracted exactly from the paid amount.');
 
         echo "PASS NEAR 24-decimal paid amount and refund history are subtracted exactly\n";
+    }
+
+    public static function testExternalRefundHistoryUtf16Boundary(): void
+    {
+        $validRefs = [
+            'ascii_128' => str_repeat('a', 128),
+            'ascii_129' => str_repeat('b', 129),
+            'ascii_200' => str_repeat('c', 200),
+            'cyrillic_150' => str_repeat("\xD1\x8F", 150),
+            'cyrillic_200' => str_repeat("\xD1\x8F", 200),
+            'astral_100' => str_repeat("\xF0\x9F\x98\x80", 100),
+        ];
+
+        // Non-blocking external history entries (failed full / completed overpayment) with valid <=200 UTF-16 keys
+        // must be accepted by RefundProjector so a subsequent full refund can proceed.
+        foreach ($validRefs as $label => $ref) {
+            RefundFixture::reset('10', '9');
+            RefundFixture::$remote['wdr_ext_failed'] = [
+                'withdrawal_id' => 'wdr_ext_failed', 'invoice_id' => 'inv_fixture', 'project_id' => 'prj_fixture',
+                'type' => 'refund', 'mode' => 'full', 'external_order_id' => $ref, 'status' => 'failed',
+                'is_final' => true, 'is_test' => true, 'amount' => '10', 'currency' => 'USDT', 'network' => 'SOL',
+                'first_sender' => 'first-original-sender', 'destination_address' => 'first-original-sender',
+            ];
+            self::check(self::state(RefundFixture::call('request', 'full'), 'full') === 'pending',
+                'RefundProjector rejected valid UTF-16 history key: ' . $label);
+        }
+
+        // Over-limit (>200 UTF-16 units) history entries must still be rejected as unreadable history.
+        foreach ([
+            'ascii_201' => str_repeat('a', 201),
+            'cyrillic_201' => str_repeat("\xD1\x8F", 201),
+            'astral_100_plus_1' => str_repeat("\xF0\x9F\x98\x80", 100) . 'a',
+            'astral_101' => str_repeat("\xF0\x9F\x98\x80", 101),
+        ] as $label => $tooLong) {
+            RefundFixture::reset('10', '9');
+            RefundFixture::$remote['wdr_ext_long'] = [
+                'withdrawal_id' => 'wdr_ext_long', 'invoice_id' => 'inv_fixture', 'project_id' => 'prj_fixture',
+                'type' => 'refund', 'mode' => 'full', 'external_order_id' => $tooLong, 'status' => 'failed',
+                'is_final' => true, 'is_test' => true, 'amount' => '10', 'currency' => 'USDT', 'network' => 'SOL',
+                'first_sender' => 'first-original-sender', 'destination_address' => 'first-original-sender',
+            ];
+            self::check(self::state(RefundFixture::call('request', 'full'), 'full') === 'reserved'
+                && RefundFixture::$posts === [],
+                'RefundProjector accepted over-limit UTF-16 history key: ' . $label);
+        }
+
+        echo "PASS BUG-1269 refund external_order_id 200 UTF-16 code unit boundaries in RefundProjector\n";
     }
 
     public static function check(bool $condition, string $failure): void
@@ -282,6 +353,7 @@ final class RefundFixture
     public static $requests = [];
     public static $readOverride = [];
     public static $detailPins = [];
+    public static $detailDenials = [];
     public static $postSnapshot;
 
     public static function reset(string $paid = '9', string $expected = '9', ?string $status = null): void
@@ -297,7 +369,7 @@ final class RefundFixture
         self::$losePostResponse = self::$noteFault = false;
         self::$canEdit = true;
         self::$notes = self::$posts = self::$remote = self::$requests = self::$readOverride = [];
-        self::$detailPins = [];
+        self::$detailPins = self::$detailDenials = [];
         self::$postSnapshot = null;
         $connection = ConnectionStore::lock(7);
         GivewpRefund::check($connection->acquire(), 'Could not lock the fixture connection.');
@@ -586,6 +658,11 @@ function wp_safe_remote_request(string $url, array $options)
     } else {
         $id = basename($path);
         GivewpRefund::check(strpos($path, '/v1/refunds/wdr_') === 0 && isset(RefundFixture::$remote[$id]), 'An unrelated refund was read.');
+        if (RefundFixture::$detailDenials !== []) {
+            $status = array_shift(RefundFixture::$detailDenials);
+
+            return ['response' => ['code' => $status], 'body' => json_encode(['status' => $status, 'code' => 'fixture_denied'])];
+        }
         $intent = RefundIntentStore::byAttempt(1, RefundFixture::$remote[$id]['mode']);
         RefundFixture::$detailPins[] = [$intent['withdrawal_id'], $intent['recipient_hash']];
         $body = array_replace(RefundFixture::$remote[$id], RefundFixture::$readOverride);
@@ -629,7 +706,7 @@ function give_get_currencies_list(): array { return []; }
 function give_get_ip(): string { return '192.0.2.22'; }
 function __(string $value, string $domain = ''): string { return $value; }
 function is_wp_error($value): bool { return $value instanceof WP_Error; }
-function wp_remote_retrieve_response_code(array $response): int { return 200; }
+function wp_remote_retrieve_response_code(array $response): int { return $response['response']['code'] ?? 200; }
 function wp_remote_retrieve_body(array $response): string { return $response['body']; }
 function wp_remote_retrieve_headers(array $response): array { return []; }
 
@@ -711,4 +788,6 @@ GivewpRefund::testFirstRefundSnapshotPinsRecipient(true);
 GivewpRefund::testMissingOrConflictingFirstSnapshotNeedsList();
 GivewpRefund::testCrossBindingAndCapability();
 GivewpRefund::testFinalPaidWithinServerTolerance();
+GivewpRefund::testAcceptedRefundRereadAfterTemporaryDenial();
 GivewpRefund::testNearPrecisionRefundHistory();
+GivewpRefund::testExternalRefundHistoryUtf16Boundary();

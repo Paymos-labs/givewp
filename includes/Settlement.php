@@ -298,6 +298,15 @@ final class Settlement
             ? AmountGuard::normalizeDecimal($value) : null;
     }
 
+    private static function withinUtf16Units(string $value, int $max): bool
+    {
+        // .NET string limits count UTF-16 code units, including two for astral characters.
+        $characters = preg_match_all('/./us', $value);
+        $surrogatePairs = preg_match_all('/[\x{10000}-\x{10FFFF}]/u', $value);
+
+        return $characters !== false && $surrogatePairs !== false && ($characters + $surrogatePairs) <= $max;
+    }
+
     private static function refundReview(Client $client, array $attempt, array $payment): ?string
     {
         $filters = ['invoice_id' => $attempt['invoice_id'], 'limit' => 20];
@@ -321,7 +330,8 @@ final class Settlement
                     || ($refund['is_final'] ?? null) !== in_array($status, self::REFUND_FINAL, true)
                     || ($refund['currency'] ?? null) !== $payment['currency'] || ($refund['network'] ?? null) !== $payment['network']
                     || $amount === null || $amount === '0'
-                    || !is_string($refund['external_order_id'] ?? null) || $refund['external_order_id'] === '' || strlen($refund['external_order_id']) > 200
+                    || !is_string($refund['external_order_id'] ?? null) || $refund['external_order_id'] === ''
+                    || !self::withinUtf16Units($refund['external_order_id'], 200)
                 ) {
                     return 'refund_snapshot_invalid';
                 }

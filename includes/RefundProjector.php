@@ -374,6 +374,15 @@ final class RefundProjector
         return null;
     }
 
+    private static function withinUtf16Units(string $value, int $max): bool
+    {
+        // .NET string limits count UTF-16 code units, including two for astral characters.
+        $characters = preg_match_all('/./us', $value);
+        $surrogatePairs = preg_match_all('/[\x{10000}-\x{10FFFF}]/u', $value);
+
+        return $characters !== false && $surrogatePairs !== false && ($characters + $surrogatePairs) <= $max;
+    }
+
     private static function verifiedRefund(array $wire, array $invoice, array $attempt): ?VerifiedRefund
     {
         $status = $wire['status'] ?? null;
@@ -388,7 +397,7 @@ final class RefundProjector
             || !in_array($status, array_merge(self::ACTIVE, self::FINAL), true)
             || ($wire['is_final'] ?? null) !== in_array($status, self::FINAL, true)
             || ($status === 'completed' && (!is_int($wire['completed_at'] ?? null) || $wire['completed_at'] <= 0))
-            || !is_string($external) || trim($external) === '' || strlen($external) > 200 || preg_match('/[\x00-\x1f\x7f]/', $external)
+            || !is_string($external) || trim($external) === '' || !self::withinUtf16Units($external, 200) || preg_match('/[\x00-\x1f\x7f]/', $external)
             || !is_string($recipient) || preg_match('/\A[\x21-\x7e]{1,256}\z/', $recipient) !== 1
             || ($wire['destination_address'] ?? null) !== $recipient || $amount === null || $amount === '0'
         ) {
@@ -405,6 +414,11 @@ final class RefundProjector
     private static function availableAmount(array $payment, array $history, array $intent): array
     {
         $amount = self::decimal($payment['paid']);
+        // Paymos refunds only an invoice whose received amount covers the expected one. A donation it
+        // completed inside its underpayment tolerance cannot be refunded in either mode.
+        if (self::difference($amount, self::decimal($payment['expected'])) === null) {
+            return ['reason' => 'refund_amount_unavailable'];
+        }
         $recipientHash = null;
         foreach ($history as $refund) {
             $hash = self::recipientHash($refund);

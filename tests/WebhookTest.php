@@ -246,6 +246,74 @@ final class GivewpWebhook
         echo "PASS native protected edits, stale save, harmless edit, destructive guards and same mutex\n";
     }
 
+    public static function testRefundExternalOrderIdUtf16Boundary(): void
+    {
+        $validRefs = [
+            'ascii_128' => str_repeat('a', 128),
+            'ascii_129' => str_repeat('b', 129),
+            'ascii_200' => str_repeat('c', 200),
+            'cyrillic_150' => str_repeat("\xD1\x8F", 150),
+            'cyrillic_200' => str_repeat("\xD1\x8F", 200),
+            'astral_100' => str_repeat("\xF0\x9F\x98\x80", 100),
+        ];
+
+        // Non-blocking refunds (failed/cancelled full, completed/active overpayment) with valid UTF-16 keys
+        // must allow verified payment completion.
+        foreach ($validRefs as $label => $ref) {
+            foreach ([
+                ['mode' => 'full', 'status' => 'failed', 'is_final' => true],
+                ['mode' => 'full', 'status' => 'cancelled', 'is_final' => true],
+                ['mode' => 'overpayment', 'status' => 'completed', 'is_final' => true],
+            ] as $shape) {
+                GivewpSettlementFixture::reset();
+                GivewpSettlementFixture::$refundPage['items'] = [array_replace(
+                    GivewpSettlementFixture::refund('refund_complete'),
+                    $shape + ['external_order_id' => $ref]
+                )];
+                self::check(GivewpSettlementFixture::deliver(GivewpSettlementFixture::event())->get_status() === 200,
+                    'Non-blocking refund with valid UTF-16 key refused: ' . $label);
+                $row = AttemptStore::byId(1);
+                self::check($row['status'] === 'verified_paid' && $row['review_reason'] === null && Donation::find(51)->status->isComplete(),
+                    'Non-blocking refund with valid UTF-16 key blocked completion: ' . $label);
+            }
+        }
+
+        // Active/completed full refund with valid 200 UTF-16 key MUST still block completion.
+        foreach (['refund_active', 'refund_complete'] as $blocking) {
+            GivewpSettlementFixture::reset();
+            GivewpSettlementFixture::$refundPage['items'] = [array_replace(
+                GivewpSettlementFixture::refund($blocking),
+                ['external_order_id' => $validRefs['cyrillic_200']]
+            )];
+            GivewpSettlementFixture::deliver(GivewpSettlementFixture::event());
+            self::check(AttemptStore::byId(1)['status'] !== 'verified_paid'
+                && AttemptStore::byId(1)['review_reason'] === 'full_refund_detected',
+                'Blocking full refund did not block completion: ' . $blocking);
+            self::assertPending();
+        }
+
+        // Keys over 200 UTF-16 units (201 ASCII, 201 Cyrillic, 100 astral + 1 ASCII, 101 astral) must fail snapshot validation.
+        foreach ([
+            'ascii_201' => str_repeat('a', 201),
+            'cyrillic_201' => str_repeat("\xD1\x8F", 201),
+            'astral_100_plus_1' => str_repeat("\xF0\x9F\x98\x80", 100) . 'a',
+            'astral_101' => str_repeat("\xF0\x9F\x98\x80", 101),
+        ] as $label => $tooLong) {
+            GivewpSettlementFixture::reset();
+            GivewpSettlementFixture::$refundPage['items'] = [array_replace(
+                GivewpSettlementFixture::refund('refund_complete'),
+                ['mode' => 'full', 'status' => 'failed', 'is_final' => true, 'external_order_id' => $tooLong]
+            )];
+            GivewpSettlementFixture::deliver(GivewpSettlementFixture::event());
+            self::check(AttemptStore::byId(1)['status'] !== 'verified_paid'
+                && AttemptStore::byId(1)['review_reason'] === 'refund_snapshot_invalid',
+                'Over-limit UTF-16 key was accepted: ' . $label);
+            self::assertPending();
+        }
+
+        echo "PASS BUG-1269 refund external_order_id 200 UTF-16 code unit boundaries in Settlement\n";
+    }
+
     private static function denied(callable $operation): void
     {
         try {
@@ -691,4 +759,5 @@ if (realpath($_SERVER['SCRIPT_FILENAME']) === __FILE__) {
     GivewpWebhook::testTerminalPaymentReview();
     GivewpWebhook::testParallelDelivery();
     GivewpWebhook::testNativeGuards();
+    GivewpWebhook::testRefundExternalOrderIdUtf16Boundary();
 }

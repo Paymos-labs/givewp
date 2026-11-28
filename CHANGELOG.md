@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-28
+
+- fix(givewp): no refunds for tolerance-paid donations, green preflight
+- docs(plugins): add 6-language READMEs (EN/zh-CN/ru/es/de/tr) and YouTube walkthrough previews across all 25 Paymos-labs repos
+- chore: bundle Paymos PHP SDK v1.13.0
+- chore: rebuild canonical CMS package
+
+- Stopped offering and sending refunds for a donation Paymos completed inside its underpayment tolerance (for example 9.95 of 10). Paymos refuses both refund modes for such a payment, so the request ended as Failed; the plugin now keeps it waiting with `refund_amount_unavailable` without a request and hides the refund button for that mode.
+
 ## [1.1.1] - 2026-11-22
 
 - chore: rebuild canonical CMS package

@@ -154,6 +154,8 @@ final class RefundAdmin
                 throw new \UnexpectedValueException('Paymos refund scope is inconsistent.');
             }
             $state = $intent['state'] ?? 'none';
+            // Paymos refuses a mode with nothing to refund for this payment, so it is not offered again.
+            $refused = ($intent['review_reason'] ?? null) === 'refund_amount_unavailable';
             $modes[$mode] = [
                 'state' => $state,
                 'reference' => $intent['withdrawal_id'] ?? null,
@@ -161,7 +163,7 @@ final class RefundAdmin
                 'currency' => $intent['currency'] ?? null,
                 'network' => $intent['network'] ?? null,
                 'review_reason' => $intent['review_reason'] ?? null,
-                'can_request' => $canRequest && in_array($state, ['none', 'reserved'], true),
+                'can_request' => $canRequest && in_array($state, ['none', 'reserved'], true) && !$refused,
                 'can_poll' => in_array($state, ['unknown', 'pending', 'projection_pending', 'review'], true),
             ];
         }

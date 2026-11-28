@@ -174,8 +174,10 @@ function wp_parse_url(string $url, int $component = -1)
 
 function wp_safe_remote_request(string $url, array $options): array
 {
+    // WordPress takes the timeout in seconds as int or float; the bound is 8 seconds, not a PHP type.
     givewpTestCheck(
-        $options['method'] === 'POST' && $options['timeout'] === 8 && $options['redirection'] === 0
+        $options['method'] === 'POST' && is_numeric($options['timeout']) && (float) $options['timeout'] === 8.0
+        && $options['redirection'] === 0
         && $options['sslverify'] && $options['reject_unsafe_urls'],
         'The scoped SDK HTTP request was not bounded and verified.'
     );
